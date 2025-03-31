@@ -2,19 +2,20 @@ import telebot
 import sqlite3
 from telebot import types
 
-bot = telebot.TeleBot('7841440458:AAFwMEasA_AkaEy7CwjdKlEadLHiBBloPyI')
-conn = sqlite3.connect('C:/bot/pictures.db', check_same_thread=False)
+bot = telebot.TeleBot('7841440458:AAFwMEasA_AkaEy7CwjdKlEadLHiBBloPyI') # подключение к боту
+conn = sqlite3.connect('C:/bot/pictures.db', check_same_thread=False) # подключение к бд
 cursor = conn.cursor()
 
-TableFed = cursor.execute("""SELECT * from feedback""").fetchall()
-TablePicFed = cursor.execute("""SELECT * from picfeedback""").fetchall()
-
+TableFed = cursor.execute("""SELECT * from feedback""").fetchall() # вся таблица отзывов
+TablePicFed = cursor.execute("""SELECT * from picfeedback""").fetchall() # вся таблица отзывов на картины
 TableArt = cursor.execute("""SELECT * from artists""").fetchall()  # вся таблица художников
+TablePic = cursor.execute("""SELECT * from pictures""").fetchall() # вся таблица картин
+
 All_artists = []  # список всех художников
 for i in TableArt:
     All_artists.append(i[1])
 
-TablePic = cursor.execute("""SELECT * from pictures""").fetchall()
+
 All_pictures = {}  # словарь имя картины : путь к ней на пк
 for i in TablePic:
     All_pictures[i[2]] = i[1].replace("\\", "/").replace('"', '')
@@ -28,8 +29,8 @@ for i in TablePic:
     All_ID[i[2]] = i[0]
 
 
-@bot.message_handler(commands=['start'])
-def start_message(message):
+@bot.message_handler(commands=['start']) # функция на старт
+def start_message(message): 
     keyboard = types.ReplyKeyboardMarkup(resize_keyboard=True)
     button1 = types.KeyboardButton("Каталог художников")
     button2 = types.KeyboardButton("Каталог картин")
@@ -79,8 +80,7 @@ def Writefeed(call):
     bot.register_next_step_handler(mesg, Write_feedback)
 
 
-def Write_feedback(
-        message):  # я хз как это работает но я это сделал. она и щет пустую строку в нужном столбцйе добавляет туда сообщение
+def Write_feedback(message):  # я хз как это работает но я это сделал. она ищет пустую строку в нужном столбцйе добавляет туда сообщение
     per1 = where.split("wfeed")[1]
     for i in range(len(TablePic)):
         if TablePic[i][2] == per1:
@@ -122,7 +122,7 @@ def ALL_Artists_list(message):
 
 
 @bot.message_handler(func=lambda message: message.text == 'Посмотреть отзывы о выставке')  # вывод отзывов (5 с конца)
-def write_to_support(message):
+def See_5_feedback(message):
     TableFed = cursor.execute("""SELECT * from feedback""").fetchall()
     for i in range(len(TableFed)):
         bot.send_message(message.from_user.id,f'{i+1}) {TableFed[-1 * (i + 1)][0]}')
@@ -130,8 +130,7 @@ def write_to_support(message):
             break
 
 
-def save_feedback(
-        message):  # добавление отзыва о всей выставке ( есть кастыль так как строку он добавлять не хочет поэтому создаю список с 1 элементом который добавляется)
+def save_feedback(message):  # добавление отзыва о всей выставке ( есть кастыль так как строку он добавлять не хочет поэтому создаю список с 1 элементом который добавляется)
     a = []
     a.append(message.text)
     cursor.execute(f'INSERT INTO feedback (feedback) VALUES (?)', (a))
@@ -139,7 +138,7 @@ def save_feedback(
     bot.send_message(message.from_user.id, "Ваш отзыв сохранён")
 
 
-@bot.message_handler(func=lambda message: message.text == 'Написать отзыв о выставке')  # вывод отзыво (5 с конца)
+@bot.message_handler(func=lambda message: message.text == 'Написать отзыв о выставке')  # написать отзыв 
 def write_to_support(message):
     bot.send_message(message.from_user.id, "Напишите отзыв")
     bot.register_next_step_handler(message, save_feedback)
