@@ -63,12 +63,24 @@ def Admin(message):
     keyboard.add(button7)
     bot.send_message(message.from_user.id, "ОХАЕ", reply_markup=keyboard)
 
-@bot.message_handler(func=lambda message: message.text == 'Добавить художника')  # выводит список всех картин
+@bot.message_handler(func=lambda message: message.text == 'Добавить художника')  # добавить художника этап 1
 def ALL_Artists_list(message):
-    DataBase()
+    bot.register_next_step_handler(message,Add_Name)
+    bot.send_message(message.chat.id, "Напишите автора")
 
 
+def Add_Name(message): # добавить художника этап 2 ( добавление имени)
+    global Add_art_name
+    Add_art_name=message.text
+    cursor.execute(f'INSERT INTO artists (creator_name) VALUES (?)', (message.text,))
+    conn.commit()
+    bot.register_next_step_handler(message, Add_Desc)
+    bot.send_message(message.chat.id, "Напишите описание")
 
+def Add_Desc(message): # добавить художника этап 3 ( добавление описание)
+    cursor.execute(f'UPDATE artists SET description = "{message.text}" where creator_name = "{Add_art_name}" ')
+    conn.commit()
+    bot.send_message(message.chat.id, f'Автор сохранён')
 
 @bot.callback_query_handler(func=lambda call: call.data[:5] == 'desa1')  # описание картин
 def Discription_Pic(call):
@@ -190,7 +202,7 @@ def Redact_Artists(call):
 def Redact_Artists_Update(message): # изменить описание картины после получения сообщения
     cursor.execute(f'UPDATE artists SET description = "{message.text}" where creator_name = "{Name_Artists_Readct}" ')
     conn.commit()
-    bot.send_message(message.chat.id, f'Ваш отзыв сохранен')
+    bot.send_message(message.chat.id, f'Описание сохранено')
 
 
 
