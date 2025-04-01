@@ -39,7 +39,7 @@ DataBase()
 Admin = 0
 
 
-@bot.message_handler(func=lambda message: message.text == 'Не Администратор')  # выход из админа
+@bot.message_handler(func=lambda message: message.text == 'Посетитель')  # выход из админа
 @bot.message_handler(commands=['start'])  # функция на старт
 def start_message(message):
     DataBase()
@@ -54,7 +54,7 @@ def start_message(message):
     keyboard.add(button1, button2)
     keyboard.add(button3, button4)
     keyboard.add(button5)
-    bot.send_message(message.from_user.id, "ОХАЁ", reply_markup=keyboard)
+    bot.send_message(message.from_user.id, "Бот запущен", reply_markup=keyboard)
 
 
 @bot.message_handler(func=lambda message: message.text == 'Администратор')  #
