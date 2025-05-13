@@ -1,10 +1,91 @@
 import telebot
 import sqlite3
+import qrcode
 from telebot import types
+from io import BytesIO
+from botocore.client import Config
+import boto3
+import os
+from uuid import uuid4
+import hashlib
+import base64
 
-bot = telebot.TeleBot('7841440458:AAFwMEasA_AkaEy7CwjdKlEadLHiBBloPyI')  # подключение к боту
 conn = sqlite3.connect('C:/bot/pictures.db', check_same_thread=False)  # подключение к бд
+
 cursor = conn.cursor()
+
+s3 = boto3.client(
+    's3',
+    endpoint_url='https://storage.yandexcloud.net',
+    aws_access_key_id='YCAJENyY1xC2xpg97hE4AdDXI',
+    aws_secret_access_key='YCM6LGz6LnaD4AB4L5QqgeAPGGM8hS_ySSpUUVAr',
+    region_name='ru-central1',
+    config=Config(
+        signature_version='s3v4',
+        s3={'addressing_style': 'virtual'}
+    )
+)
+
+
+def upload_to_s3(file_path, bucket_name='arts-bot'):
+    """Загружает файл в S3 и возвращает URL"""
+    try:
+        # уникальное имя файла
+        file_ext = os.path.splitext(file_path)[1]
+        s3_key = f"{uuid4()}{file_ext}"
+
+        # Читаем файл и вычисляем MD5 в правильном формате
+        with open(file_path, 'rb') as f:
+            content = f.read()
+            md5_digest = base64.b64encode(hashlib.md5(content).digest()).decode('utf-8')
+
+        # Загружаем файл
+        s3.put_object(
+            Bucket=bucket_name,
+            Key=s3_key,
+            Body=content,
+            ContentType='image/jpeg',
+            ContentMD5=md5_digest,
+            ACL='public-read'
+        )
+
+        # Формируем URL
+        return f"https://storage.yandexcloud.net/{bucket_name}/{s3_key}"
+
+    except Exception as e:
+        print(f"Ошибка загрузки: {e}")
+        return None
+
+
+# Проверка и создание таблиц при старте
+def init_database():
+    try:
+        # Создаем таблицу pictures с нужными колонками
+        cursor.execute("""
+        CREATE TABLE IF NOT EXISTS pictures (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            pictures TEXT NOT NULL,
+            pictures_name TEXT,
+            discription TEXT,
+            pictures_avtors TEXT
+        )""")
+
+        # Проверяем существование колонки pictures
+        cursor.execute("PRAGMA table_info(pictures)")
+        columns = [column[1] for column in cursor.fetchall()]
+
+        if 'pictures' not in columns:
+            # Если колонки нет - добавляем
+            cursor.execute("ALTER TABLE pictures ADD COLUMN pictures TEXT")
+
+        conn.commit()
+        print("База данных успешно инициализирована")
+    except Exception as e:
+        print(f"Ошибка инициализации БД: {e}")
+
+
+# Вызываем при старте
+init_database()
 
 
 def DataBase():  # обновление данных взятых из бд
@@ -22,10 +103,10 @@ def DataBase():  # обновление данных взятых из бд
     for i in TablePic:
         All_pictures_avtors[i[2]] = i[4]
 
-    All_pictures = {}  # словарь имя картины : путь к ней на пк
+    All_pictures = {}  # словарь имя картины : URL в S3
     for i in TablePic:
-        All_pictures[i[2]] = i[1].replace("\\", "/").replace('"', '')
-
+        All_pictures[i[2]] = i[1]
+    print(TablePic)
     All_discription = {}  # словарь имя картины : ее описание
     for i in TablePic:
         All_discription[i[2]] = i[3]
@@ -50,11 +131,12 @@ def start_message(message):
     button2 = types.KeyboardButton("Каталог картин")
     button3 = types.KeyboardButton("Посмотреть отзывы о выставке")
     button4 = types.KeyboardButton("Написать отзыв о выставке")
-    button5 = types.KeyboardButton("Администратор")
+    button5 = types.KeyboardButton("QR-код")
+    button6 = types.KeyboardButton("Администратор")
     keyboard.add(button1, button2)
     keyboard.add(button3, button4)
-    keyboard.add(button5)
-    bot.send_message(message.from_user.id, "Бот запущен", reply_markup=keyboard)
+    keyboard.add(button5, button6)
+    bot.send_message(message.from_user.id, "Бот запущен в режиме посетителя", reply_markup=keyboard)
 
 
 @bot.message_handler(func=lambda message: message.text == 'Администратор')  #
@@ -67,11 +149,11 @@ def Admin(message):
     button2 = types.KeyboardButton("Каталог картин")
     button3 = types.KeyboardButton("Добавить картину")
     button4 = types.KeyboardButton("Добавить художника")
-    button7 = types.KeyboardButton("Не Администратор")
+    button7 = types.KeyboardButton("Посетитель")
     keyboard.add(button1, button2)
     keyboard.add(button3, button4)
     keyboard.add(button7)
-    bot.send_message(message.from_user.id, "ОХАЕ", reply_markup=keyboard)
+    bot.send_message(message.from_user.id, "Запущен режим администратора", reply_markup=keyboard)
 
 
 @bot.message_handler(func=lambda message: message.text == 'Добавить художника')  # добавить художника этап 1
@@ -159,6 +241,112 @@ def Write_feedback(
     mesg = bot.send_message(message.chat.id, 'Ваш отзыв сохранён')
 
 
+@bot.message_handler(func=lambda message: message.text == 'Добавить картину')
+def add_picture(message):
+    msg = bot.send_message(message.chat.id, "Отправьте фотографию картины")
+    bot.register_next_step_handler(msg, process_picture_step)
+
+
+def process_picture_step(message):
+    try:
+        # Проверяем, что это фото
+        if not message.photo:
+            bot.send_message(message.chat.id, "Пожалуйста, отправьте фотографию")
+            return
+
+        # Скачиваем фото
+        file_info = bot.get_file(message.photo[-1].file_id)
+        downloaded_file = bot.download_file(file_info.file_path)
+
+        # Сохраняем временно
+        temp_path = f"temp_{file_info.file_id}.jpg"
+        with open(temp_path, 'wb') as new_file:
+            new_file.write(downloaded_file)
+
+        # Загружаем в S3
+        image_url = upload_to_s3(temp_path)
+
+        if image_url:
+            # Удаляем временный файл
+            os.remove(temp_path)
+
+            # Запрашиваем остальные данные
+            msg = bot.send_message(message.chat.id, "Введите название картины")
+            bot.register_next_step_handler(msg, lambda m: get_picture_name(m, image_url))
+        else:
+            bot.send_message(message.chat.id, "Ошибка загрузки изображения")
+
+    except Exception as e:
+        bot.send_message(message.chat.id, f"Ошибка: {str(e)}")
+
+
+def get_picture_name(message, image_url):
+    try:
+        picture_name = message.text
+        msg = bot.send_message(message.chat.id, "Введите описание картины")
+        bot.register_next_step_handler(msg, lambda m: get_picture_desc(m, image_url, picture_name))
+    except Exception as e:
+        bot.send_message(message.chat.id, f"Ошибка: {str(e)}")
+
+
+def get_picture_desc(message, image_url, picture_name):
+    try:
+        description = message.text
+        msg = bot.send_message(message.chat.id, "Введите авторов через запятую")
+        bot.register_next_step_handler(msg, lambda m: save_picture_to_db(m, image_url, picture_name, description))
+    except Exception as e:
+        bot.send_message(message.chat.id, f"Ошибка: {str(e)}")
+
+
+def save_picture_to_db(message, image_url, picture_name, description):
+    try:
+        authors = message.text
+
+        # Сохраняем в базу данных
+        cursor.execute(
+            """INSERT INTO pictures (pictures, pictures_name, discription, pictures_avtors) 
+            VALUES (?, ?, ?, ?)""",
+            (image_url, picture_name, description, authors)
+        )
+        conn.commit()
+
+        bot.send_message(message.chat.id, "Картина успешно добавлена!")
+        DataBase()  # Обновляем кэш
+
+    except Exception as e:
+        bot.send_message(message.chat.id, f"Ошибка сохранения: {str(e)}")
+
+
+@bot.message_handler(content_types=['photo'])
+def handle_photo_upload(message):
+    try:
+        # Получаем файл
+        file_info = bot.get_file(message.photo[-1].file_id)
+        file_bytes = bot.download_file(file_info.file_path)
+        file_ext = os.path.splitext(file_info.file_path)[1] or '.jpg'
+
+        # Загружаем в S3
+        image_url = upload_to_s3(file_bytes, file_ext, bucket_name='arts-bot')
+
+        if image_url:
+            # Сохраняем в БД с ВСЕМИ полями
+            cursor.execute(
+                """INSERT INTO pictures 
+                (pictures, pictures_name, discription, pictures_avtors) 
+                VALUES (?, ?, ?, ?)""",
+                (image_url, "Название по умолчанию", "Описание по умолчанию", "Автор не указан")
+            )
+            conn.commit()
+
+            bot.reply_to(message, f"Фото загружено! URL: {image_url}\n"
+                                  "Теперь введите команду /edit для добавления информации")
+        else:
+            bot.reply_to(message, "Ошибка загрузки в облачное хранилище")
+
+    except Exception as e:
+        bot.reply_to(message, f"Ошибка: {str(e)}")
+
+
 @bot.message_handler(func=lambda message: message.text == 'Каталог художников')  # выводит список всех художников
 def ALL_Pictures_list(message):
     DataBase()
@@ -227,13 +415,14 @@ def ALL_Artists_list(message):
     DataBase()
     if Admin == 0:
         for i, v in All_pictures.items():
+            print(i, v)
             keyboard1 = telebot.types.InlineKeyboardMarkup()
             button_save = telebot.types.InlineKeyboardButton(text="Описание", callback_data=f'desa1{i}')
             button_feed = telebot.types.InlineKeyboardButton(text="Посмотреть отзывы", callback_data=f'sfeed{i}')
             button_feed1 = telebot.types.InlineKeyboardButton(text="Написать отзыв", callback_data=f'wfeed{i}')
             keyboard1.add(button_save, button_feed1)
             keyboard1.add(button_feed)
-            bot.send_photo(message.from_user.id, open(v, "rb"), caption=i, reply_markup=keyboard1)
+            bot.send_photo(message.from_user.id, v, caption=i, reply_markup=keyboard1)
     elif Admin == 1:
         for i, v in All_pictures.items():
             keyboard1 = telebot.types.InlineKeyboardMarkup()
@@ -243,7 +432,7 @@ def ALL_Artists_list(message):
             button4 = telebot.types.InlineKeyboardButton(text="Удалить", callback_data=f'delep{i}')
             keyboard1.add(button2, button1)
             keyboard1.add(button3, button4)
-            bot.send_photo(message.from_user.id, open(v, "rb"), caption=i, reply_markup=keyboard1)
+            bot.send_photo(message.from_user.id, v, caption=i, reply_markup=keyboard1)
 
 
 @bot.callback_query_handler(func=lambda call: call.data[:5] == 'edita')  # изменить описание картины
@@ -332,6 +521,99 @@ def save_feedback(
 def Write_All_Feedback(message):
     bot.send_message(message.from_user.id, "Напишите отзыв")
     bot.register_next_step_handler(message, save_feedback)
+
+
+@bot.callback_query_handler(func=lambda call: call.data.startswith('qr_'))
+def handle_qr_request(call):
+    name = call.data[3:]  # Извлекаем название картины
+    if name in All_pictures:
+        url = All_pictures[name]
+
+        # Генерация QR-кода
+        qr = qrcode.QRCode(version=1, box_size=10, border=4)
+        qr.add_data(url)
+        qr.make(fit=True)
+
+        img = qr.make_image(fill_color="black", back_color="white")
+        img_bytes = BytesIO()
+        img.save(img_bytes, format="PNG")
+        img_bytes.seek(0)
+
+        bot.send_photo(
+            call.message.chat.id,
+            img_bytes,
+            caption=f"QR-код для картины: {name}\nСсылка: {url}"
+        )
+    else:
+        bot.send_message(call.message.chat.id, "Ошибка: картина не найдена")
+
+
+@bot.message_handler(func=lambda message: message.text == "QR-код")
+def qr_menu(message):
+    DataBase()
+    if not All_pictures:
+        bot.send_message(message.chat.id, "В каталоге пока нет картин")
+        start_message(message)  # Возврат в меню
+        return
+
+    markup = types.ReplyKeyboardMarkup(resize_keyboard=True, one_time_keyboard=True)
+    for name in All_pictures.keys():
+        markup.add(types.KeyboardButton(name))
+    markup.add(types.KeyboardButton("◀️ Назад"))
+
+    bot.send_message(message.chat.id, "Выберите картину:", reply_markup=markup)
+
+
+@bot.message_handler(func=lambda message: message.text == "◀️ Назад")
+def back_to_menu(message):
+    start_message(message)
+
+
+@bot.message_handler(func=lambda message: message.text in All_pictures.keys())
+def handle_picture_selection(message):
+    generate_qr(message)
+    start_message(message)  # Возврат в меню после генерации
+
+
+def generate_qr(message):
+    # Получаем СВЕЖИЕ данные из БД перед генерацией
+    conn = sqlite3.connect('C:/bot/pictures.db', check_same_thread=False)  # подключение к бд
+    cursor = conn.cursor()
+    cursor.execute(
+        "SELECT pictures FROM pictures WHERE pictures_name = ?",
+        (message.text,)
+    )
+    result = cursor.fetchone()
+    conn.close()
+
+    if not result:
+        bot.send_message(message.chat.id, "Данные картины не найдены")
+        start_message(message)
+        return
+
+    url = result[0]
+
+    if not url or not isinstance(url, str) or not url.startswith('http'):
+        bot.send_message(message.chat.id, "Некорректный URL картины")
+        start_message(message)
+        return
+
+    # Генерация QR-кода
+    qr = qrcode.QRCode(version=1, box_size=10, border=4)
+    qr.add_data(url)
+    qr.make(fit=True)
+
+    img = qr.make_image(fill_color="black", back_color="white")
+    img_bytes = BytesIO()
+    img.save(img_bytes, format="PNG")
+    img_bytes.seek(0)
+
+    # Отправка с возвратом в меню
+    bot.send_photo(
+        message.chat.id,
+        img_bytes,
+        caption=f"QR-код для: {message.text}\nURL: {url}"
+    )
 
 
 bot.infinity_polling()
